@@ -42,6 +42,22 @@ const mocks = vi.hoisted(() => ({
       readonly isSuccess: boolean;
     }
   >(() => ({ data: undefined, isSuccess: false })),
+  // The source-branch scripts read (`worktree.readScriptsAtRef`). Defaults to
+  // "settled, no committed scripts" so most tests fall through to summary.scripts
+  // exactly as the create path does.
+  readScriptsAtRef: vi.fn<
+    () => {
+      readonly data:
+        | { readonly scripts: WorktreeEntryScripts | null }
+        | undefined;
+      readonly isSuccess: boolean;
+      readonly isError: boolean;
+    }
+  >(() => ({ data: { scripts: null }, isSuccess: true, isError: false })),
+  // Captures the git ref the dialog requests for worktree.readScriptsAtRef, so
+  // tests can pin that the SOURCE branch (new) / checkout branch is read - not
+  // just that the method fired.
+  lastReadScriptsRef: { current: "" },
 }));
 
 vi.mock("@/hooks/worktree/use-worktree-set-repo-scripts-mutation", () => ({
@@ -59,7 +75,16 @@ vi.mock("@/hooks/worktree/use-worktree-set-repo-scripts-mutation", () => ({
   }),
 }));
 vi.mock("@/hooks/host/use-host-query", () => ({
-  useHostQuery: () => mocks.listAllForHost(),
+  useHostQuery: (opts: {
+    readonly method: string;
+    readonly params: { readonly ref: string };
+  }) => {
+    if (opts.method === "worktree.readScriptsAtRef") {
+      mocks.lastReadScriptsRef.current = opts.params.ref;
+      return mocks.readScriptsAtRef();
+    }
+    return mocks.listAllForHost();
+  },
 }));
 
 interface Shell {
@@ -230,6 +255,13 @@ describe("<WorktreeScriptsDialog />", () => {
       data: undefined,
       isSuccess: false,
     });
+    mocks.readScriptsAtRef.mockReset();
+    mocks.readScriptsAtRef.mockReturnValue({
+      data: { scripts: null },
+      isSuccess: true,
+      isError: false,
+    });
+    mocks.lastReadScriptsRef.current = "";
   });
   afterEach(() => {
     cleanup();
@@ -241,6 +273,9 @@ describe("<WorktreeScriptsDialog />", () => {
       .setIntent(STAGING_KEY, stagedWorktreeIntent(null));
 
     renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
+
+    // A new worktree reads scripts at its fork SOURCE, not the new branch name.
+    expect(mocks.lastReadScriptsRef.current).toBe("main");
 
     fireEvent.change(setupDefaultField(), { target: { value: "bun install" } });
     fireEvent.click(saveButton());
@@ -267,6 +302,8 @@ describe("<WorktreeScriptsDialog />", () => {
     // path yet, so it reads "Existing branch · <branch>", not a worktree path.
     expect(screen.getByText("Existing branch")).toBeTruthy();
     expect(screen.getByText("release/2.0")).toBeTruthy();
+    // A checked-out branch reads scripts at that branch's committed ref.
+    expect(mocks.lastReadScriptsRef.current).toBe("release/2.0");
 
     fireEvent.change(setupDefaultField(), { target: { value: "echo co" } });
     fireEvent.click(saveButton());
@@ -349,6 +386,76 @@ describe("<WorktreeScriptsDialog />", () => {
     renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
 
     expect(setupDefaultField().value).toBe("echo staged");
+  });
+
+  it("prefills from the SOURCE branch's committed scripts for a new worktree (not the primary checkout)", () => {
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(STAGING_KEY, stagedWorktreeIntent(null));
+    mocks.readScriptsAtRef.mockReturnValue({
+      data: {
+        scripts: { setup: osScript("echo branch"), teardown: osScript("") },
+      },
+      isSuccess: true,
+      isError: false,
+    });
+
+    // summary.scripts is the primary checkout's value - it must NOT win over the
+    // source branch's committed scripts.
+    renderDialog(
+      PRE_CREATE_CONTEXT,
+      summaryWith({
+        setup: osScript("echo primary"),
+        teardown: osScript(""),
+        updatedAt: 0,
+      }),
+    );
+
+    expect(setupDefaultField().value).toBe("echo branch");
+    expect(mocks.lastReadScriptsRef.current).toBe("main");
+  });
+
+  it("shows a spinner (no fields) until the source branch read settles", () => {
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(STAGING_KEY, stagedWorktreeIntent(null));
+    mocks.readScriptsAtRef.mockReturnValue({
+      data: undefined,
+      isSuccess: false,
+      isError: false,
+    });
+
+    renderDialog(PRE_CREATE_CONTEXT, summaryWith(null));
+
+    // No flash of the primary checkout: the editable field is withheld behind a
+    // spinner until the source-branch read resolves.
+    expect(screen.queryByLabelText("Setup script (Default)")).toBeNull();
+    expect(screen.getByRole("status")).toBeTruthy();
+  });
+
+  it("on a failed source-branch read, starts blank with an error note (never the primary checkout)", () => {
+    useWorktreeIntentStagingStore
+      .getState()
+      .setIntent(STAGING_KEY, stagedWorktreeIntent(null));
+    mocks.readScriptsAtRef.mockReturnValue({
+      data: undefined,
+      isSuccess: false,
+      isError: true,
+    });
+
+    // summary.scripts is the stale primary-checkout value — it must NOT be
+    // seeded when the source-branch read fails.
+    renderDialog(
+      PRE_CREATE_CONTEXT,
+      summaryWith({
+        setup: osScript("echo primary"),
+        teardown: osScript(""),
+        updatedAt: 0,
+      }),
+    );
+
+    expect(setupDefaultField().value).toBe("");
+    expect(screen.getByRole("alert")).toBeTruthy();
   });
 
   it("prefills from the worktree's own env for an existing worktree", () => {

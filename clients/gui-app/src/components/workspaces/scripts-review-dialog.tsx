@@ -45,6 +45,14 @@ export function ScriptsReviewDialog(props: {
   readonly pathLabel: string;
   readonly pathValue: string;
   readonly scriptSeed: RepoScriptsSeed | null;
+  // `true` while the seed is still being fetched (e.g. reading a source branch's
+  // committed scripts). The fields are replaced by a spinner so the editor never
+  // flashes a stale seed before the real one resolves; the caller remounts (via
+  // `key`) with the resolved seed once it lands.
+  readonly seedPending: boolean;
+  // A non-blocking warning rendered above the fields (e.g. the source-branch
+  // scripts read failed, so the editor starts blank). `null` when there's none.
+  readonly errorNote: string | null;
   readonly inUseNote: string | null;
   readonly testId: string;
   // Returns a promise that resolves when the save actually succeeded and rejects
@@ -137,7 +145,32 @@ export function ScriptsReviewDialog(props: {
               {props.pathValue}
             </code>
           </div>
-          <RepoScriptsFields value={scripts} onChange={setScripts} />
+          {props.errorNote !== null ? (
+            <p
+              className="text-ui-xs text-destructive"
+              role="alert"
+              data-testid={`${props.testId}-error-note`}
+            >
+              {props.errorNote}
+            </p>
+          ) : null}
+          {props.seedPending ? (
+            <div
+              className="flex min-h-[8rem] items-center justify-center gap-2 text-muted-foreground"
+              data-testid={`${props.testId}-seed-loading`}
+              role="status"
+              aria-live="polite"
+            >
+              <AgentSpinningDots
+                className="text-current"
+                testId={`${props.testId}-seed-spinner`}
+                variant={undefined}
+              />
+              <span className="sr-only">Loading scripts…</span>
+            </div>
+          ) : (
+            <RepoScriptsFields value={scripts} onChange={setScripts} />
+          )}
           {props.inUseNote !== null ? (
             <p className="text-ui-xs text-muted-foreground">
               {props.inUseNote}
@@ -158,7 +191,7 @@ export function ScriptsReviewDialog(props: {
             type="button"
             variant="default"
             size="sm"
-            disabled={saveBusy || !scriptsChanged}
+            disabled={saveBusy || props.seedPending || !scriptsChanged}
             aria-live="polite"
             onClick={handleSave}
           >
