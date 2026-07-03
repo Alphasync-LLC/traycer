@@ -113,6 +113,8 @@ import {
   terminalListV10,
   terminalRenameV10,
   terminalSubscribeV10,
+  terminalSubscribeV11,
+  terminalSubscribeV12,
 } from "@traycer/protocol/host/terminal/contracts";
 import { notificationsSubscribeV10 } from "@traycer/protocol/host/notifications/contracts";
 import {
@@ -2622,10 +2624,16 @@ export const hostStreamRpcRegistry = defineVersionedStreamRpcRegistry({
   },
   "terminal.subscribe": {
     1: {
-      latestMinor: 0,
+      latestMinor: 2,
       versions: {
         0: {
           contract: terminalSubscribeV10,
+        },
+        1: {
+          contract: terminalSubscribeV11,
+        },
+        2: {
+          contract: terminalSubscribeV12,
         },
       },
     },
